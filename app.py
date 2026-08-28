@@ -73,14 +73,6 @@ app.mount(
     name="static",
 )
 
-app.mount(
-    "/assets",
-    StaticFiles(
-        directory=BASE_DIR / "assets",
-    ),
-    name="assets",
-)
-
 
 PAGES = {
     "/": "index.html",
