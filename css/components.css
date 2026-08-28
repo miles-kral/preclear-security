@@ -1,0 +1,84 @@
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 50px;
+    padding: 0 24px;
+
+    border: 1px solid transparent;
+    border-radius: 999px;
+
+    font-size: 0.95rem;
+    font-weight: 700;
+
+    transition:
+        transform 160ms ease,
+        background-color 160ms ease,
+        border-color 160ms ease;
+}
+
+
+.button:hover {
+    transform: translateY(-2px);
+}
+
+
+.button--small {
+    min-height: 42px;
+    padding-inline: 20px;
+}
+
+
+.button--primary {
+    background: var(--color-blue-500);
+    color: var(--color-white);
+}
+
+
+.button--primary:hover {
+    background: var(--color-blue-600);
+}
+
+
+.button--outline {
+    border-color: rgba(255, 255, 255, 0.22);
+    color: var(--color-white);
+}
+
+
+.button--outline:hover {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+
+.button--ghost {
+    border-color: rgba(255, 255, 255, 0.16);
+    color: var(--color-white);
+}
+
+
+.button--ghost:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.button--light-outline {
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+}
+
+.button--light-outline:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.38);
+}
+
+.button--outline-dark {
+    border-color: rgba(6, 17, 31, 0.18);
+    color: var(--color-navy-950);
+}
+
+.button--outline-dark:hover {
+    border-color: rgba(23, 105, 224, 0.45);
+    background: rgba(47, 128, 237, 0.06);
+    color: var(--color-blue-600);
+}
