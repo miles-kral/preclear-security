@@ -6,10 +6,15 @@ import resend
 import logging
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from collections import defaultdict, deque
+from threading import Lock
+from time import monotonic
+
+import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -36,10 +41,123 @@ CONTACT_TO_EMAIL = os.getenv(
     "",
 )
 
+TURNSTILE_SITE_KEY = os.getenv(
+    "TURNSTILE_SITE_KEY",
+    "",
+)
+
+TURNSTILE_SECRET_KEY = os.getenv(
+    "TURNSTILE_SECRET_KEY",
+    "",
+)
+
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
+CONTACT_RATE_LIMIT = 3
+CONTACT_RATE_WINDOW_SECONDS = 600
+
+_submission_times = defaultdict(deque)
+_submission_lock = Lock()
+
+
+def get_request_ip(
+    request: Request,
+) -> str:
+    forwarded_for = request.headers.get(
+        "x-forwarded-for",
+        "",
+    )
+
+    if forwarded_for:
+        return (
+            forwarded_for
+            .split(",")[0]
+            .strip()
+        )
+
+    if request.client:
+        return request.client.host
+
+    return "unknown"
+
+
+def contact_rate_limit_exceeded(
+    request: Request,
+) -> bool:
+    client_ip = get_request_ip(
+        request
+    )
+
+    now = monotonic()
+
+    cutoff = (
+        now
+        - CONTACT_RATE_WINDOW_SECONDS
+    )
+
+    with _submission_lock:
+        timestamps = _submission_times[
+            client_ip
+        ]
+
+        while (
+            timestamps
+            and timestamps[0] < cutoff
+        ):
+            timestamps.popleft()
+
+        if (
+            len(timestamps)
+            >= CONTACT_RATE_LIMIT
+        ):
+            return True
+
+        timestamps.append(now)
+
+    return False
+
+
+def verify_turnstile(
+    token: str,
+    secret_key: str,
+    remote_ip: str | None = None,
+) -> bool:
+    if not secret_key:
+        return True
+
+    if not token:
+        return False
+
+    payload = {
+        "secret": secret_key,
+        "response": token,
+    }
+
+    if remote_ip:
+        payload["remoteip"] = remote_ip
+
+    try:
+        response = requests.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data=payload,
+            timeout=5,
+        )
+
+        response.raise_for_status()
+
+        result = response.json()
+
+        return bool(
+            result.get("success")
+        )
+
+    except (
+        requests.RequestException,
+        ValueError,
+    ):
+        return False
 
 app = FastAPI(
     title="PreClear Cybersecurity",
@@ -109,15 +227,42 @@ for route_path, filename in PAGES.items():
 
 @app.post("/contact")
 def submit_contact(
+    request: Request,
     inquiry_type: str = Form(...),
     name: str = Form(...),
     company: str = Form(""),
     email: str = Form(...),
     message: str = Form(...),
     website: str = Form(""),
+    turnstile_token: str = Form(
+        "",
+        alias="cf-turnstile-response",
+    ),
 ):
     # Honeypot field for basic bot filtering.
     if website:
+        return RedirectResponse(
+            url="/contact.html?sent=1",
+            status_code=303,
+        )
+
+    client_ip = get_request_ip(
+        request
+    )
+
+    if not verify_turnstile(
+        token=turnstile_token,
+        secret_key=TURNSTILE_SECRET_KEY,
+        remote_ip=client_ip,
+    ):
+        return RedirectResponse(
+            url="/contact.html?sent=1",
+            status_code=303,
+        )
+
+    if contact_rate_limit_exceeded(
+        request
+    ):
         return RedirectResponse(
             url="/contact.html?sent=1",
             status_code=303,
