@@ -19,7 +19,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 
 logger = logging.getLogger(
-    "preclear_security"
+    "uvicorn.error"
 )
 
 load_dotenv(
@@ -50,6 +50,15 @@ TURNSTILE_SECRET_KEY = os.getenv(
     "TURNSTILE_SECRET_KEY",
     "",
 )
+
+TURNSTILE_ALLOWED_HOSTNAMES = {
+    hostname.strip().lower()
+    for hostname in os.getenv(
+        "TURNSTILE_ALLOWED_HOSTNAMES",
+        "preclearsecurity.com,www.preclearsecurity.com",
+    ).split(",")
+    if hostname.strip()
+}
 
 
 if RESEND_API_KEY:
@@ -123,6 +132,8 @@ def verify_turnstile(
     token: str,
     secret_key: str,
     remote_ip: str | None = None,
+    expected_action: str | None = None,
+    allowed_hostnames: set[str] | None = None,
 ) -> bool:
     if not secret_key:
         return True
@@ -149,9 +160,41 @@ def verify_turnstile(
 
         result = response.json()
 
-        return bool(
-            result.get("success")
+        if not result.get("success"):
+            return False
+
+        action = (
+            str(result.get("action") or "")
+            .strip()
         )
+
+        hostname = (
+            str(result.get("hostname") or "")
+            .strip()
+            .lower()
+        )
+
+        using_test_key = (
+            secret_key.startswith("1x")
+            or secret_key.startswith("2x")
+            or secret_key.startswith("3x")
+        )
+
+        if (
+            expected_action
+            and not using_test_key
+            and action != expected_action
+        ):
+            return False
+
+        if (
+            allowed_hostnames
+            and not using_test_key
+            and hostname not in allowed_hostnames
+        ):
+            return False
+
+        return True
 
     except (
         requests.RequestException,
@@ -224,6 +267,43 @@ for route_path, filename in PAGES.items():
         include_in_schema=False,
     )
 
+def log_contact_security_event(
+    request: Request,
+    event: str,
+    *,
+    blocked: bool = True,
+) -> None:
+    client_ip = get_request_ip(
+        request
+    )
+
+    user_agent = (
+        request.headers.get(
+            "user-agent",
+            "unknown",
+        )
+        .strip()
+    )
+
+    if len(user_agent) > 180:
+        user_agent = (
+            user_agent[:180]
+            + "..."
+        )
+
+    log_method = (
+        logger.warning
+        if blocked
+        else logger.info
+    )
+
+    log_method(
+        "CONTACT_SECURITY event=%s ip=%s user_agent=%r",
+        event,
+        client_ip,
+        user_agent,
+    )
+
 
 @app.post("/contact")
 def submit_contact(
@@ -241,6 +321,11 @@ def submit_contact(
 ):
     # Honeypot field for basic bot filtering.
     if website:
+        log_contact_security_event(
+            request,
+            "contact_blocked_honeypot",
+        )
+
         return RedirectResponse(
             url="/contact.html?sent=1",
             status_code=303,
@@ -254,7 +339,16 @@ def submit_contact(
         token=turnstile_token,
         secret_key=TURNSTILE_SECRET_KEY,
         remote_ip=client_ip,
+        expected_action="corporate_contact",
+        allowed_hostnames=(
+            TURNSTILE_ALLOWED_HOSTNAMES
+        ),
     ):
+        log_contact_security_event(
+            request,
+            "contact_blocked_turnstile",
+        )
+
         return RedirectResponse(
             url="/contact.html?sent=1",
             status_code=303,
@@ -263,6 +357,11 @@ def submit_contact(
     if contact_rate_limit_exceeded(
         request
     ):
+        log_contact_security_event(
+            request,
+            "contact_blocked_rate_limit",
+        )
+
         return RedirectResponse(
             url="/contact.html?sent=1",
             status_code=303,
@@ -388,6 +487,12 @@ def submit_contact(
             "Inquiry type=%s message_id=%s",
             inquiry_type,
             response.get("id"),
+        )
+
+        log_contact_security_event(
+            request,
+            "contact_accepted",
+            blocked=False,
         )
 
     except Exception:
